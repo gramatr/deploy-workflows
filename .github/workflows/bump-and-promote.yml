@@ -52,6 +52,9 @@ on:
       deploy_token:
         description: "PAT with write access to target_repo (e.g. the github-gramatr-repo-rw secret already used elsewhere this session)"
         required: true
+      signing_key:
+        description: "SSH private key to sign the deploy commit with. Required if target_repo enforces a required_signatures ruleset (n90-co/prod-argocd-v2 does) -- an unsigned bot commit is BLOCKED there, confirmed live. Optional for targets with no such rule."
+        required: false
     outputs:
       pr_url:
         description: "URL of the opened PR, empty if no change was needed"
@@ -99,6 +102,22 @@ jobs:
         run: |
           git config user.name "deploy-workflows[bot]"
           git config user.email "deploy-workflows@gramatr.com"
+
+      - name: Configure commit signing
+        env:
+          SIGNING_KEY: ${{ secrets.signing_key }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "No signing_key provided -- commits will be unsigned. Fine unless target_repo enforces required_signatures."
+            exit 0
+          fi
+          key_path="$RUNNER_TEMP/deploy_signing_key"
+          umask 177
+          printf '%s\n' "$SIGNING_KEY" > "$key_path"
+          git config gpg.format ssh
+          git config user.signingkey "$key_path"
+          git config commit.gpgsign true
 
       - name: Commit and push
         id: commit
