@@ -1,0 +1,142 @@
+name: Bump and Promote Image Tag
+
+# Reusable building block for the E34 release-cut pipeline
+# (gramatr/gramatr-paas docs/scope/EPIC-azure-production-bws-staging-realignment-2026-10-07.md).
+#
+# Bumps one image's tag in one or more manifest files in a target GitOps repo
+# (n90-co/prod-argocd-v2 for staging, gramatr/azure-infra for production),
+# opens a PR, and optionally auto-merges it. Whether this run represents an
+# automatic staging deploy or a gated production promotion is NOT decided
+# here -- it's decided entirely by the calling workflow's job definition
+# (a job with `environment: production-approval` blocks until a human
+# approves before this workflow ever runs; a plain job runs immediately).
+# This workflow has no opinion about staging vs. production -- same logic,
+# same inputs, different caller.
+#
+# One call bumps ONE image. A service with multiple images (e.g.
+# gramatr-console's UI + app tiers) calls this workflow twice.
+
+on:
+  workflow_call:
+    inputs:
+      target_repo:
+        description: "owner/repo to bump, e.g. n90-co/prod-argocd-v2"
+        required: true
+        type: string
+      target_ref:
+        description: "branch to PR against"
+        required: false
+        type: string
+        default: main
+      manifest_paths:
+        description: "Space-separated manifest file paths (relative to target_repo root) containing the image line to bump"
+        required: true
+        type: string
+      image_name:
+        description: "Full image name without tag, e.g. ghcr.io/gramatr/intelligence"
+        required: true
+        type: string
+      image_tag:
+        description: "New tag to set, e.g. v0.1.11"
+        required: true
+        type: string
+      pr_title:
+        required: true
+        type: string
+      auto_merge:
+        description: "Merge the PR immediately once opened (staging). Leave false for production promotion -- a human merges after the environment approval gate."
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      deploy_token:
+        description: "PAT with write access to target_repo (e.g. the github-gramatr-repo-rw secret already used elsewhere this session)"
+        required: true
+    outputs:
+      pr_url:
+        description: "URL of the opened PR, empty if no change was needed"
+        value: ${{ jobs.bump.outputs.pr_url }}
+      skipped:
+        description: "true if target_repo was already at image_tag -- no PR opened"
+        value: ${{ jobs.bump.outputs.skipped }}
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    outputs:
+      pr_url: ${{ steps.pr.outputs.url }}
+      skipped: ${{ steps.commit.outputs.skip }}
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target_repo }}
+          ref: ${{ inputs.target_ref }}
+          token: ${{ secrets.deploy_token }}
+
+      - name: Bump image tag(s)
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          MANIFEST_PATHS: ${{ inputs.manifest_paths }}
+        run: |
+          set -euo pipefail
+          escaped_name=$(printf '%s' "$IMAGE_NAME" | sed 's/[.\/&]/\\&/g')
+          for f in $MANIFEST_PATHS; do
+            if [ ! -f "$f" ]; then
+              echo "::error::manifest path not found: $f"
+              exit 1
+            fi
+            echo "Bumping $IMAGE_NAME in $f -> $IMAGE_TAG"
+            sed -i -E "s#(image:[[:space:]]*${escaped_name}):[^[:space:]]+#\1:${IMAGE_TAG}#g" "$f"
+            if ! grep -q "image:[[:space:]]*${IMAGE_NAME}:${IMAGE_TAG}" "$f"; then
+              echo "::error::expected image line not found in $f after bump -- image name or path is probably wrong, not a successful no-op"
+              exit 1
+            fi
+          done
+
+      - name: Configure git identity
+        run: |
+          git config user.name "deploy-workflows[bot]"
+          git config user.email "deploy-workflows@gramatr.com"
+
+      - name: Commit and push
+        id: commit
+        env:
+          GH_TOKEN: ${{ secrets.deploy_token }}
+          MANIFEST_PATHS: ${{ inputs.manifest_paths }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- $MANIFEST_PATHS; then
+            echo "No changes -- target already at this tag, skipping PR"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          branch="deploy/$(echo '${{ inputs.image_name }}' | tr '/' '-')-${{ inputs.image_tag }}-${{ github.run_id }}"
+          git checkout -b "$branch"
+          git add -- $MANIFEST_PATHS
+          git commit -m "deploy: bump ${{ inputs.image_name }} to ${{ inputs.image_tag }}"
+          git push origin "$branch"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Open PR
+        if: steps.commit.outputs.skip != 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.deploy_token }}
+        run: |
+          set -euo pipefail
+          url=$(gh pr create \
+            --repo "${{ inputs.target_repo }}" \
+            --base "${{ inputs.target_ref }}" \
+            --head "${{ steps.commit.outputs.branch }}" \
+            --title "${{ inputs.pr_title }}" \
+            --body "Automated by [gramatr/deploy-workflows](https://github.com/gramatr/deploy-workflows). Bumps \`${{ inputs.image_name }}\` to \`${{ inputs.image_tag }}\`. Triggered from ${{ github.repository }}@${{ github.sha }}, run ${{ github.run_id }}.")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Auto-merge
+        if: steps.commit.outputs.skip != 'true' && inputs.auto_merge
+        env:
+          GH_TOKEN: ${{ secrets.deploy_token }}
+        run: gh pr merge --repo "${{ inputs.target_repo }}" --auto --merge "${{ steps.pr.outputs.url }}"
