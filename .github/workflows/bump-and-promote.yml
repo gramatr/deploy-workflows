@@ -48,6 +48,11 @@ on:
         required: false
         type: boolean
         default: false
+      runs_on:
+        description: "Runner label for the bump job. Defaults to arc-runner-gramatr (self-hosted, gramatr org) for callers in that org. arc-runner-gramatr is registered ONLY to https://github.com/gramatr (confirmed via `kubectl get autoscalingrunnerset -A` -- it is an org-scoped ARC runner group, not available to any other org's jobs, which queue forever and never run if left on it). A caller outside the gramatr org (e.g. a different GitHub org entirely, not just a different repo) MUST override this to ubuntu-latest or its own org's runner label."
+        required: false
+        type: string
+        default: arc-runner-gramatr
     secrets:
       deploy_token:
         description: "PAT with write access to target_repo (e.g. the github-gramatr-repo-rw secret already used elsewhere this session)"
@@ -65,7 +70,7 @@ on:
 
 jobs:
   bump:
-    runs-on: arc-runner-gramatr
+    runs-on: ${{ inputs.runs_on }}
     outputs:
       pr_url: ${{ steps.pr.outputs.url }}
       skipped: ${{ steps.commit.outputs.skip }}
