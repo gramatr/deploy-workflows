@@ -65,7 +65,7 @@ on:
 
 jobs:
   bump:
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-gramatr
     outputs:
       pr_url: ${{ steps.pr.outputs.url }}
       skipped: ${{ steps.commit.outputs.skip }}
