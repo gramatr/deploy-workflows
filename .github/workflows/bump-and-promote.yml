@@ -53,6 +53,16 @@ on:
         required: false
         type: string
         default: arc-runner-gramatr
+      committer_name:
+        description: "git committer name for the deploy commit. Defaults to the generic bot identity below. A caller that also passes a `signing_key` secret for a target_repo enforcing a required_signatures ruleset MUST override this (and committer_email) to the name/email of the GitHub account that key is actually registered to as a verified signing key -- GitHub verifies an SSH commit signature by looking up a GitHub user whose account has that key registered AND whose email matches the commit's committer email; a bot identity with no GitHub account produces `verified: false, reason: \"no_user\"` even with a technically-valid signature, confirmed live against n90-co/prod-argocd-v2 (gramatr-paas intelligence-v0.1.18, PR n90-co/prod-argocd-v2#3107, blocked by that repo's required_signatures rule until the committer identity was corrected)."
+        required: false
+        type: string
+        default: "deploy-workflows[bot]"
+      committer_email:
+        description: "git committer email for the deploy commit -- see committer_name's own description for why this must match the signing key's registered GitHub account when signing_key is used against a required_signatures target."
+        required: false
+        type: string
+        default: "deploy-workflows@gramatr.com"
     secrets:
       deploy_token:
         description: "PAT with write access to target_repo (e.g. the github-gramatr-repo-rw secret already used elsewhere this session)"
@@ -104,9 +114,12 @@ jobs:
           done
 
       - name: Configure git identity
+        env:
+          COMMITTER_NAME: ${{ inputs.committer_name }}
+          COMMITTER_EMAIL: ${{ inputs.committer_email }}
         run: |
-          git config user.name "deploy-workflows[bot]"
-          git config user.email "deploy-workflows@gramatr.com"
+          git config user.name "$COMMITTER_NAME"
+          git config user.email "$COMMITTER_EMAIL"
 
       - name: Configure commit signing
         env:
