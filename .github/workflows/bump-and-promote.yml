@@ -101,7 +101,18 @@ jobs:
       - name: Configure git identity
         run: |
           git config user.name "deploy-workflows[bot]"
-          git config user.email "deploy-workflows@gramatr.com"
+          # Must match a VERIFIED email on the GitHub account that owns
+          # `secrets.signing_key` (prod-ssh-key-kub-ai-01-github-signing),
+          # not just any address -- GitHub's SSH-signature verification
+          # requires the commit's author/committer email to match a
+          # verified email on the key's owning account, or it reports
+          # verified:false, reason:"no_user" even though the signature
+          # itself is cryptographically valid. Found live 2026-10-17: PR
+          # n90-co/prod-argocd-v2#3149 sat BLOCKED on a target repo's
+          # `required_signatures` rule for exactly this reason, with
+          # deploy-workflows@gramatr.com (no verified owner) as the
+          # committer email. brian@n90.co verifies against this key today.
+          git config user.email "brian@n90.co"
 
       - name: Configure commit signing
         env:
