@@ -176,4 +176,24 @@ jobs:
         if: steps.commit.outputs.skip != 'true' && inputs.auto_merge
         env:
           GH_TOKEN: ${{ secrets.deploy_token }}
-        run: gh pr merge --repo "${{ inputs.target_repo }}" --auto --merge "${{ steps.pr.outputs.url }}"
+        run: |
+          set -euo pipefail
+          url="${{ steps.pr.outputs.url }}"
+          repo="${{ inputs.target_repo }}"
+          # `--auto` asks GitHub's enablePullRequestAutoMerge mutation to wait
+          # for pending required checks before merging. On a target repo with
+          # no required status checks configured (e.g. n90-co/prod-argocd-v2
+          # today) the PR is already in a clean, immediately-mergeable state
+          # with nothing to wait for, and that mutation errors
+          # ("Pull request is in clean status") instead of just merging.
+          # Confirmed live, 2026-10-20. Fall back to a direct merge in that
+          # case -- clean status means it was already safe to merge outright.
+          if ! gh pr merge --repo "$repo" --auto --merge "$url" 2>/tmp/automerge.err; then
+            if grep -q "is in clean status" /tmp/automerge.err; then
+              echo "::notice::enablePullRequestAutoMerge refused a clean PR (no required checks on $repo) -- merging directly instead"
+              gh pr merge --repo "$repo" --merge "$url"
+            else
+              cat /tmp/automerge.err >&2
+              exit 1
+            fi
+          fi
